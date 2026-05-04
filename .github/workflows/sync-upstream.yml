@@ -37,7 +37,7 @@ jobs:
 
           git fetch upstream --prune --tags
 
-          mapfile -t upstream_branches < <(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream)
+          mapfile -t upstream_branches < <(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream | grep -v '^HEAD$')
           mapfile -t origin_branches < <(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); print $2}')
 
           for branch in "${upstream_branches[@]}"; do
@@ -65,4 +65,3 @@ jobs:
           if [[ "${#upstream_tags[@]}" -gt 0 ]]; then
             git push origin --force --tags
           fi
-
