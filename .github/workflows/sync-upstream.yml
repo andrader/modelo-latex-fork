@@ -1,0 +1,68 @@
+name: Sync from GitLab upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * *" # Daily at 09:00 UTC (06:00 America/Sao_Paulo)
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream and sync refs
+        env:
+          UPSTREAM_URL: https://gitlab.com/ccsl-usp/modelo-latex.git
+          PRESERVE_BRANCH: automation-sync
+        run: |
+          set -euo pipefail
+
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "${UPSTREAM_URL}"
+          else
+            git remote add upstream "${UPSTREAM_URL}"
+          fi
+
+          git fetch upstream --prune --tags
+
+          mapfile -t upstream_branches < <(git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream)
+          mapfile -t origin_branches < <(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); print $2}')
+
+          for branch in "${upstream_branches[@]}"; do
+            git push origin "+refs/remotes/upstream/${branch}:refs/heads/${branch}"
+          done
+
+          for branch in "${origin_branches[@]}"; do
+            if [[ "${branch}" == "${PRESERVE_BRANCH}" ]]; then
+              continue
+            fi
+            if ! printf '%s\n' "${upstream_branches[@]}" | grep -Fxq "${branch}"; then
+              git push origin ":refs/heads/${branch}"
+            fi
+          done
+
+          mapfile -t upstream_tags < <(git tag -l)
+          mapfile -t origin_tags < <(git ls-remote --tags --refs origin | awk '{sub("refs/tags/","",$2); print $2}')
+
+          for tag in "${origin_tags[@]}"; do
+            if ! printf '%s\n' "${upstream_tags[@]}" | grep -Fxq "${tag}"; then
+              git push origin ":refs/tags/${tag}"
+            fi
+          done
+
+          if [[ "${#upstream_tags[@]}" -gt 0 ]]; then
+            git push origin --force --tags
+          fi
+
