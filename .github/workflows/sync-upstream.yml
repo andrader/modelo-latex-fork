@@ -23,11 +23,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Fetch upstream and sync refs
+        id: sync
         env:
           UPSTREAM_URL: https://gitlab.com/ccsl-usp/modelo-latex.git
           PRESERVE_BRANCH: automation-sync
         run: |
           set -euo pipefail
+          trap 'echo "::error title=Sync failed::Sync failed while processing refs."' ERR
+
+          changed_branches=0
+          deleted_branches=0
+          changed_tags=0
+          deleted_tags=0
 
           if git remote get-url upstream >/dev/null 2>&1; then
             git remote set-url upstream "${UPSTREAM_URL}"
@@ -41,7 +48,11 @@ jobs:
           mapfile -t origin_branches < <(git ls-remote --heads origin | awk '{sub("refs/heads/","",$2); print $2}')
 
           for branch in "${upstream_branches[@]}"; do
-            git push origin "+refs/remotes/upstream/${branch}:refs/heads/${branch}"
+            push_output="$(git push origin "+refs/remotes/upstream/${branch}:refs/heads/${branch}" 2>&1)"
+            echo "${push_output}"
+            if [[ "${push_output}" != *"Everything up-to-date"* ]]; then
+              changed_branches=$((changed_branches + 1))
+            fi
           done
 
           for branch in "${origin_branches[@]}"; do
@@ -50,6 +61,7 @@ jobs:
             fi
             if ! printf '%s\n' "${upstream_branches[@]}" | grep -Fxq "${branch}"; then
               git push origin ":refs/heads/${branch}"
+              deleted_branches=$((deleted_branches + 1))
             fi
           done
 
@@ -59,9 +71,42 @@ jobs:
           for tag in "${origin_tags[@]}"; do
             if ! printf '%s\n' "${upstream_tags[@]}" | grep -Fxq "${tag}"; then
               git push origin ":refs/tags/${tag}"
+              deleted_tags=$((deleted_tags + 1))
             fi
           done
 
           if [[ "${#upstream_tags[@]}" -gt 0 ]]; then
-            git push origin --force --tags
+            tags_output="$(git push origin --force --tags 2>&1)"
+            echo "${tags_output}"
+            if [[ "${tags_output}" != *"Everything up-to-date"* ]]; then
+              changed_tags=1
+            fi
+          else
+            echo "::notice title=Tag sync skipped::No upstream tags found; skipping tag push."
           fi
+
+          total_changes=$((changed_branches + deleted_branches + changed_tags + deleted_tags))
+          echo "total_changes=${total_changes}" >> "${GITHUB_OUTPUT}"
+          echo "changed_branches=${changed_branches}" >> "${GITHUB_OUTPUT}"
+          echo "deleted_branches=${deleted_branches}" >> "${GITHUB_OUTPUT}"
+          echo "changed_tags=${changed_tags}" >> "${GITHUB_OUTPUT}"
+          echo "deleted_tags=${deleted_tags}" >> "${GITHUB_OUTPUT}"
+
+      - name: Annotate sync summary
+        if: success()
+        run: |
+          total_changes="${{ steps.sync.outputs.total_changes }}"
+          changed_branches="${{ steps.sync.outputs.changed_branches }}"
+          deleted_branches="${{ steps.sync.outputs.deleted_branches }}"
+          changed_tags="${{ steps.sync.outputs.changed_tags }}"
+          deleted_tags="${{ steps.sync.outputs.deleted_tags }}"
+
+          if [[ "${total_changes}" -gt 0 ]]; then
+            echo "::notice title=Sync updated::Applied changes from upstream (updated branches: ${changed_branches}, deleted branches: ${deleted_branches}, updated tags: ${changed_tags}, deleted tags: ${deleted_tags})."
+          else
+            echo "::notice title=Sync skipped::No upstream changes detected; mirror already up to date."
+          fi
+
+      - name: Annotate sync failure
+        if: failure()
+        run: echo "::error title=Sync failed::Upstream synchronization failed. Check the failed step logs."
